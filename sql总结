@@ -1,0 +1,362 @@
+# sql刷题总结：
+
+-- 尽量以hive sql为主
+
+## part1：面经里出现过的
+
+#### 1、交换座位问题
+
+
+
+#### 2、行转列、列转行
+
+（1）行转列
+
+sql里用case when ； hive里用collect_set()或collect_list()
+
+```sql
+CREATE table test2(
+	yearId int(11) NOT NULL
+	,monthId int(11) NOT NULL
+	,valueId DOUBLE NOT NULL
+)
+
+DROP TABLE test2;
+
+INSERT test2 VALUES
+(2019,1,1.1),
+(2019,2,1.2),
+(2019,3,1.3),
+(2019,4,1.4),
+(2020,1,2.1),
+(2020,2,2.2),
+(2020,3,2.3),
+(2020,4,2.4);
+
+SELECT * FROM test2
+
+-- mysql的写法
+SELECT 
+	yearId
+	,max(case when monthId = 1 then valueId else 0 end) as m1
+	,max(case when monthId = 2 then valueId else 0 end) as m2
+	,max(case when monthId = 3 then valueId else 0 end) as m3 
+	,max(case when monthId = 4 then valueId else 0 end) as m4
+FROM test2
+GROUP BY yearId
+
+-- hive sql 的写法
+select yearId
+    ,collect_set(valueId)
+from test331
+group by yearId
+```
+
+
+
+（2）列转行，explode 
+
+
+
+#### 3、连续出现问题
+
+```sql
+-- 思路:用窗口函数row_number()排序，再做减法
+create table test_3(
+	student_id int(11) NOT NULL
+	,score int(11) NOT NULL
+)
+
+INSERT test_3 VALUES
+(1,89),
+(2,76),
+(3,76),
+(4,84),
+(5,84),
+(6,84),
+(7,76),
+(8,91),
+(9,88),
+(10,86)
+
+SELECT * FROM test_3
+
+-- 求连续出现3次的分数
+select student_id
+    -- ,score
+from
+(
+    select student_id
+        ,score
+        ,(score_rank/1.0 - student_id) as tmp
+    from 
+    (
+        select  
+            student_id
+            ,score
+            ,ROW_NUMBER() over(ORDER BY score desc) as score_rank 
+        from test_3
+    )t1
+)t2
+group by tmp
+having count(*) > 2
+```
+
+
+
+#### 4、相互问题
+
+#### ![image-20210331211642426](C:\Users\May1998\AppData\Roaming\Typora\typora-user-images\image-20210331211642426.png)
+
+```sql
+-- 思路就是把发送者和接受者union all 然后group by count 其实蛮巧妙的
+create table 602_test(
+    requester_id int(11) not null   
+    ,accepter_id int(11) not null
+    ,accept_date date
+)
+
+SELECT * FROM 602_test
+
+SELECT people
+	,count(*) as num
+FROM
+(
+	SELECT t1.requester_id as people
+	from 602_test t1
+	UNION ALL
+	SELECT t2.accepter_id as people
+	FROM 602_test t2
+)t
+GROUP BY people
+ORDER BY num desc
+limit 0,1
+
+```
+
+
+
+## part2：leetcode&牛客
+
+#### 1、==连续问题== 603 、180、601
+
+```
+思路：row_number 排序，再作差group by having count() 是最简单的方法
+```
+
+#### 2、TOP N问题 184、185
+
+```
+排序问题一般只要想清楚两个问题就好
+A、是否需要分组或是分区，group by 和 partition by
+B、排序 一般用窗口函数 或者 order by
+```
+
+#### 3、换座位问题 626
+
+```sql
+思路很简单：奇数号id+1，偶数号id-1，只是还需要想一想表中的行数，所以需要count(*)一下
+
+create table 626_test(
+	id int(11) NOT NULL
+	,student VARCHAR(11) NOT NULL
+)
+
+INSERT 626_test VALUES
+(1,'Abbot'),
+(2,'Doris'),
+(3,'Emerson'),
+(4,'Green'),
+(5,'Jeames');
+
+SELECT * FROM 626_test
+
+SELECT
+	case
+		when id % 2 <> 0 and id = (SELECT count(*) from 626_test) then id
+		when id % 2 = 0 then id-1
+		else 
+			id+1
+	 end as id
+	,student
+FROM 626_test
+ORDER BY id 	
+```
+
+#### 4、中位数问题 569
+
+```
+思路：正序排，再倒序排，排序号相等的即是中位数
+```
+
+#### 5、累计薪水 579
+
+```sql
+-- 用开窗函数是最简单的
+Create table employees(Id int,months int,salary int);
+
+insert overwrite employees values
+(1,1,20),
+(2,1,20),
+(1,2,30),
+(2,2,30),
+(3,2,40),
+(1,3,40),
+(3,3,60),
+(1,4,60),
+(3,4,70);
+
+select * from employees
+
+SELECT
+    Id
+    ,months
+    ,sum_salary
+FROM
+(
+    SELECT 
+        Id
+        ,months
+        ,sum(salary) over(PARTITION BY Id order by salary rows 2 preceding)  as sum_salary
+        ,row_number() over(partition by Id order by months desc) as month_rank
+    FROM employees
+)t
+where month_rank > 1
+```
+
+
+
+
+
+
+
+## part3：复杂窗口函数总结
+
+#### 1、聚合函数（group by）与分析函数（partition by）
+
+　    普通的聚合函数用`group by`分组，每个分组返回一个统计值
+　　分析函数采用`partition by`分组，并且每组每行都可以返回一个统计值
+
+　　显而易见的区别是，从返回结果上看
+　　聚合后的记录数可能会**减少**，因为它对数据源进行了group by操作，所以对结果是有影响的，即返回的结果里去掉聚合的列后，跟聚合前的结果不一样
+　　而分析后的记录数是不变的，因为它的作用仅仅在于分析，所以不会对结果有影响，即返回的结果里去掉分析的列后，跟分析前的结果是一样的
+
+
+
+#### 2、分析函数与开窗函数
+
+参考：
+
+http://lxw1234.com/archives/tag/hive-window-functions
+
+http://www.bubuko.com/infodetail-3436032.html
+
+**2.1 分析函数 ：**
+
+（1）聚合类：sum()、count()、avg()、min()、max() 等
+
+（2）窗口函数：dense_rank()、row_number()、rank() 等
+
+（3）其他：lag()、lead()
+
+**2.2 开窗函数**：
+
+```sql
+开窗函数 over() 包含三个分析子句：
+　　　　分组子句(partition by)
+　　　　排序子句(order by)
+　　　　窗口子句(rows)
+
+开窗函数over()使用形式如下：
+over(partition by xxx order by yyy rows between zzz)
+
+1、窗口子句 rows：
+preceding：表示在...之前
+　　　　　　1 preceding：表示当前记录的前1条记录
+　　　　　　2 preceding：表示当前记录的前2条记录
+　　　　　　n preceding：表示当前记录的前n条记录
+　　　　　　unbounded preceding：不受控制的，无限的,
+　　　　　　　　　　　　　　　　    若无分组，则表示所有记录的第1条记录
+　　　　　　　　　　　　　　　　    若有分组，则表示分组后，组内的第1条记录
+
+following：表示在...之后
+　　　　　　1 following：表示当前记录的后一条记录
+　　　　　　2 following：表示当前记录的后两条记录
+　　　　　　n following：表示当前记录的后n条记录
+　　　　　　unbounded following：不受控制的，无限的,
+　　　　　　　　　　　　　　　　	若无分组，则表示所有记录的最后一条记录
+　　　　　　　　　　　　　　　　	若有分组，则表示分组后，组内的最后一条记录
+相关用例：
+　　　　　　rows between unbounded preceding and unbounded following：针对所有记录
+　　　　　　rows between unbounded preceding and current row：针对第一条记录到当前记录
+　　　　　　rows between current row and unbounded following：针对当前记录到最后一条记录
+　　　　　　rows between 1 preceding and current row：针对当前记录的上一行记录到当前行记录
+　　　　　　rows between current row and 3 following：针对当前记录到当前行记录的后三条记录
+　　　　　　rows between 1 preceding and 2 following：..............................
+
+2、lag()和lead()
+
+LAG(col,n,DEFAULT) 用于统计窗口内往上第n行值
+第一个参数为列名，第二个参数为往上第n行（可选，默认为1），第三个参数为默认值（当往上第n行为NULL时候，取默认值，如不指定，则为NULL）
+
+LEAD(col,n,DEFAULT) 
+与LAG相反LEAD(col,n,DEFAULT) 用于统计窗口内往下第n行值
+第一个参数为列名，第二个参数为往下第n行（可选，默认为1），第三个参数为默认值（当往下第n行为NULL时候，取默认值，如不指定，则为NULL）
+
+
+
+-- 使用案例，表结构如下：
+create table test_2(
+    username string
+	,class int
+	,performance int
+)
+
+insert overwrite test_2 values
+('甲',1,98),
+('乙',1,95),
+('丙',1,84),
+('丁',1,56),
+('戊',1,40),
+('己',2,64),
+('庚',2,73),
+('辛',2,85),
+('壬',2,72),
+('癸',3,92),
+('子',3,64),
+('丑',3,95),
+('寅',3,81),
+('卯',4,76),
+('辰',4,86),
+('巳',4,55),
+('午',4,99),
+('未',4,39),
+('申',4,100),
+('酉',5,16),
+('戌',5,78),
+('亥',5,60);
+
+-- 在年级排名里，拿到每个人的成绩排自己前后的各两个人，再包括自己，总共5个人的平均成绩。忽略首尾的边缘问题，类似于时间序列里的移动平均法
+
+方法一：
+select
+	(performance+lag_score_1+lead_score_1+lag_score_2+lead_score_2)/5 as acg_score
+from
+(
+	select username
+	    ,performance
+	    ,lag(performance,1,0) over(order by performance desc) as lag_score_1 -- 向上1位
+		,lead(performance,1,0) over(order by performance desc) as lead_score_1 -- 向下1位
+	    ,lag(performance,2,0) over(order by performance desc) as lag_score_2 -- 向上2位
+		,lead(performance,2,0) over(order by performance desc) as lead_score_2 -- 向下2位
+	from test_2
+)t
+group by username,performance,lag_score_1,lag_score_2,lead_score_1,lead_score_2;
+
+方法二：
+select username
+    ,performance
+    ,avg(performance) over(order by performance desc rows between 2 preceding and 2 following) as avg_performance
+from test_2
+```
+
